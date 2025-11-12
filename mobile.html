@@ -4,23 +4,33 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Yalidine Locker Control</title>
-    <!-- Tailwind CSS for styling -->
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 
+      FIX: Load QR Scanner library as a standard script.
+      This file creates global variables: `window.Html5Qrcode` and `window.Html5QrcodeSupportedFormats`.
+      It is NOT an ES module, which is why importing from it failed.
+    -->
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
     <!-- Firebase Libraries -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, setLogLevel, doc, onSnapshot, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // FIX: Removed the 'import { Html5Qrcode, ... }' line, as the library is now loaded globally.
+
 
         // --- Configuration ---
-        // Replace with your actual Firebase config if necessary. Using placeholder config for now.
         const firebaseConfig = {
           apiKey: "AIzaSyBJzd4UCAgUH-SvUbw1WJDIAeyY1Kfgce4",
           authDomain: "yalidine-locker.firebaseapp.com",
           projectId: "yalidine-locker",
           storageBucket: "yalidine-locker.firebasestorage.app",
           messagingSenderId: "80966682621",
-          appId: "1:80966682621:web:19fe082c2b2fc2b582bb94",
+          appId: "1:809666Kids-Eat-Free-Flyer",
           measurementId: "G-0RSYKGESYP"
         };
         
@@ -31,9 +41,9 @@
         let db, auth, userId;
         let monitorSessionId = null;
         let lockerStatusDocRef = null;
-        let lockerData = {}; // Cache of all 12 lockers
-        let selectedParcelForRetrieval = null; // Used in Customer Mode
-        let html5QrcodeScanner;
+        let lockerData = {}; 
+        let selectedParcelForRetrieval = null; 
+        let html5Qrcode; // Use the core library object
 
         // --- DOM Elements ---
         const modeToggle = document.getElementById("mode-toggle");
@@ -48,6 +58,8 @@
         const customerParcelSelect = document.getElementById("customer-parcel-select");
         const scanButton = document.getElementById("scan-button");
         const currentModeDisplay = document.getElementById("current-mode");
+        const startScanButton = document.getElementById("start-scan-btn");
+        const scanStatusText = document.getElementById("scan-status-text");
 
         // --- Functions ---
 
@@ -56,13 +68,13 @@
             console.log(message);
             statusMessage.textContent = message;
             statusMessage.className = `text-center mt-4 h-6 font-medium ${isError ? "text-red-600" : "text-green-600"}`;
-            
-            setTimeout(() => { statusMessage.textContent = ""; }, 4000);
+            if (!isError) {
+                setTimeout(() => { statusMessage.textContent = ""; }, 4000);
+            }
         }
 
         /** Generates a unique, complex parcel code. */
         function generateParcelCode(lockerId) {
-            // YL-LockerID-UUIDFragment-Timestamp
             const fragment = crypto.randomUUID().substring(0, 8).toUpperCase();
             return `YL-${lockerId}-${fragment}`;
         }
@@ -78,14 +90,10 @@
             currentModeDisplay.textContent = isStaff ? 'Staff (Add)' : 'Customer (Retrieve)';
             staffForm.classList.toggle('hidden', !isStaff);
             customerForm.classList.toggle('hidden', isStaff);
-            
-            // Re-render available options when switching
             updateLockerSelectors();
         }
 
-        /**
-         * Populates the locker select menus based on the current data state.
-         */
+        /** Populates the locker select menus based on the current data state. */
         function updateLockerSelectors() {
             // 1. Staff Mode: List Available Lockers
             availableLockerSelect.innerHTML = '<option value="" disabled selected>Select an available locker</option>';
@@ -107,17 +115,16 @@
                  document.getElementById("staff-submit-button").disabled = false;
             }
             
-            // 2. Customer Mode: List Occupied Lockers (Simulate User's Parcels)
+            // 2. Customer Mode: List Occupied Lockers
             customerParcelSelect.innerHTML = '<option value="" disabled selected>Select a parcel to retrieve</option>';
             let parcelCount = 0;
             for (let i = 1; i <= LOCKER_COUNT; i++) {
                 const locker = lockerData[`locker_${i}`];
-                // Check if a parcel is stored AND it has an owner (for simulation purposes)
                 if (locker && locker.status === 'Occupied' && locker.ownerId) { 
                     parcelCount++;
                     const option = document.createElement('option');
-                    option.value = i; // Store locker ID as value
-                    option.textContent = `${locker.ownerId}'s Parcel in L${i}`;
+                    option.value = i; 
+                    option.textContent = `${locker.ownerId}'s Parcel in L${i} (Code: ${locker.parcelCode})`;
                     customerParcelSelect.appendChild(option);
                 }
             }
@@ -128,33 +135,27 @@
             }
         }
         
-        /**
-         * Listens to the central locker status document to keep the UI updated.
-         */
+        /** Listens to the central locker status document. */
         function listenForLockerStatus() {
             lockerStatusDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'lockers', 'status');
-
             onSnapshot(lockerStatusDocRef, (docSnap) => {
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    lockerData = data; // Update local cache
+                    lockerData = data; 
                     updateLockerSelectors();
                 } else {
-                    showStatus("Error: Monitor session is not active or document not created.", true);
+                    showStatus("Error: Monitor session is not active.", true);
                 }
             }, (error) => {
                 showStatus(`Error listening to status: ${error.message}`, true);
             });
         }
 
-
-        /**
-         * STAFF MODE: Handles creating a new parcel and updating Firestore.
-         */
+        /** STAFF MODE: Handles creating a new parcel. */
         async function handleCreation(event) {
             event.preventDefault();
             if (!lockerStatusDocRef) {
-                showStatus("Not connected to a monitor. Please scan first.", true);
+                showStatus("Not connected. Please scan monitor QR code.", true);
                 return;
             }
             
@@ -180,18 +181,14 @@
 
             try {
                 await updateDoc(lockerStatusDocRef, updateField);
-                showStatus(`Parcel created successfully for Locker ${lockerId}! Code: ${newParcelCode}, PIN: ${newPassword}`, false);
+                showStatus(`Locker ${lockerId} occupied! PIN: ${newPassword}`, false);
                 staffForm['ownerId'].value = '';
-                
             } catch (err) {
                 showStatus(`Error storing parcel: ${err.message}`, true);
-                console.error(err);
             }
         }
         
-        /**
-         * CUSTOMER MODE: Triggers the lock open command via Firestore.
-         */
+        /** CUSTOMER MODE: Triggers the lock open command. */
         async function handleRetrievalScan() {
             if (!lockerStatusDocRef || !selectedParcelForRetrieval) {
                 showStatus("Please select a parcel first.", true);
@@ -207,71 +204,82 @@
             }
             
             const updateField = {};
-            // The command is simply to change the status, which the monitor is watching.
             updateField[`locker_${lockerId}.status`] = 'OpenCommand'; 
             updateField[`locker_${lockerId}.lastChange`] = serverTimestamp();
 
             try {
-                // Send the command by updating the status to 'OpenCommand'
                 await updateDoc(lockerStatusDocRef, updateField);
-                showStatus(`Open command sent for Parcel in Locker ${lockerId}. Check monitor.`, false);
-                // Clear the selection
+                showStatus(`Open command sent for Locker ${lockerId}.`, false);
                 customerParcelSelect.value = '';
                 selectedParcelForRetrieval = null;
-
             } catch (err) {
                 showStatus(`Error sending open command: ${err.message}`, true);
-                console.error(err);
             }
         }
 
         /**
-         * Called when the QR code scanner successfully reads the Monitor Session ID.
+         * === QR SCANNER FIX: PART 1 ===
+         * This function is called when the QR code is successfully read.
          */
-        function onScanSuccess(decodedText) {
+        async function onScanSuccess(decodedText) {
             monitorSessionId = decodedText;
             console.log(`Scan successful, session ID: ${monitorSessionId}`);
+            
+            // Stop the camera
+            try {
+                // Use the global window.Html5Qrcode object
+                await html5Qrcode.stop();
+                console.log("Scanner stopped.");
+            } catch (err) {
+                console.error("Error stopping scanner:", err);
+            }
 
-            // Stop the scanner and clear the view
-            html5QrcodeScanner.clear().then(() => {
-                scannerView.classList.add("hidden");
-                formView.classList.remove("hidden");
-                connectedMonitorId.textContent = monitorSessionId.substring(0, 13) + "...";
-                showStatus("Successfully connected to monitor.", false);
-                
-                // Start listening to the shared locker status document
-                listenForLockerStatus();
-
-            }).catch(err => {
-                console.error("Failed to clear scanner", err);
-                showStatus("Connection error: Failed to stop scanner.", true);
-            });
+            // Switch views
+            scannerView.classList.add("hidden");
+            formView.classList.remove("hidden");
+            connectedMonitorId.textContent = monitorSessionId.substring(0, 13) + "...";
+            showStatus("Successfully connected to monitor.", false);
+            
+            // Start listening to the shared locker status document
+            listenForLockerStatus();
         }
 
         /**
-         * Called when the QR code scanner fails.
+         * === QR SCANNER FIX: PART 2 ===
+         * This function starts the camera feed when the user clicks the button.
          */
-        function onScanFailure(error) {
-            // Suppress continuous low-level warnings
+        async function startScanner() {
+            startScanButton.disabled = true;
+            scanStatusText.textContent = "Starting camera...";
+            try {
+                await html5Qrcode.start(
+                    { facingMode: "environment" }, // Use rear camera
+                    { 
+                        fps: 10, 
+                        qrbox: { width: 250, height: 250 } 
+                    },
+                    onScanSuccess, // Success callback
+                    (errorMessage) => { /* onScanFailure (ignored) */ }
+                );
+                scanStatusText.textContent = "Scanning... Point at QR code.";
+                startScanButton.classList.add('hidden'); // Hide button once started
+            } catch (err) {
+                showStatus("Error starting camera. Please grant permissions.", true);
+                startScanButton.disabled = false;
+                scanStatusText.textContent = "Click button to start.";
+            }
         }
 
-        /**
-         * Resets the app to the scanning state.
-         */
+        /** Resets the app to the scanning state. */
         function resetToScanner() {
             monitorSessionId = null;
             lockerStatusDocRef = null;
             selectedParcelForRetrieval = null;
             formView.classList.add("hidden");
             scannerView.classList.remove("hidden");
-            
-            // Re-render the scanner
-            html5QrcodeScanner = new Html5QrcodeScanner(
-                "qr-reader", 
-                { fps: 10, qrbox: { width: 250, height: 250 }, rememberLastUsedCamera: true },
-                /* verbose= */ false
-            );
-            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+            startScanButton.classList.remove('hidden');
+            startScanButton.disabled = false;
+            scanStatusText.textContent = "Point camera at monitor's QR code.";
         }
 
 
@@ -288,12 +296,18 @@
                 auth = getAuth(app);
                 setLogLevel('Debug');
 
+                // === QR SCANNER FIX: PART 3 ===
+                // Initialize the core QR code library (from global script)
+                // We access it via `window.Html5Qrcode` now.
+                html5Qrcode = new window.Html5Qrcode("qr-reader-region", { 
+                    formatsToSupport: [ window.Html5QrcodeSupportedFormats.QR_CODE ] 
+                });
+
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         userId = user.uid;
                         console.log(`Authenticated as: ${userId}`);
-                        // Start the scanner logic
-                        resetToScanner(); 
+                        resetToScanner(); // Go to scanner view
                     } else {
                         console.log("Signing in...");
                         signInAnonymously(auth).catch((error) => {
@@ -302,66 +316,57 @@
                     }
                 });
 
-                // Event Listeners for new logic
+                // --- Event Listeners ---
                 modeToggle.addEventListener("change", switchMode);
                 staffForm.addEventListener("submit", handleCreation);
                 scanAgainButton.addEventListener("click", resetToScanner);
+                startScanButton.addEventListener("click", startScanner); // New scanner start
                 
-                // Handle parcel selection for retrieval
                 customerParcelSelect.addEventListener('change', (e) => {
                     selectedParcelForRetrieval = e.target.value;
-                    scanButton.disabled = false;
+                    scanButton.disabled = !e.target.value;
                 });
                 
-                // Handle the final step in customer mode
                 scanButton.addEventListener('click', handleRetrievalScan);
                 
-                // Initial state setup
-                switchMode(); 
-
+                switchMode(); // Initial state setup
             } catch (e) {
                 console.error(`Initialization error: ${e.message}`);
             }
         }
 
-        // Load the QR Scanner library, then run main
-        const qrScanLibScript = document.createElement('script');
-        qrScanLibScript.src = "https://unpkg.com/html5-qrcode@2.0.9/dist/html5-qrcode.min.js";
-        qrScanLibScript.onload = main;
-        document.head.appendChild(qrScanLibScript);
+        // Run main after DOM is loaded
+        window.addEventListener('DOMContentLoaded', main);
+
     </script>
     <style>
-        /* Custom styling for the mode toggle switch */
-        .switch {
-          @apply relative inline-block w-14 h-8;
+        .switch { @apply relative inline-block w-14 h-8; }
+        .switch input { @apply opacity-0 w-0 h-0; }
+        .slider { @apply absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-gray-300 transition duration-400 rounded-full; }
+        .slider:before { @apply absolute content-[''] h-6 w-6 left-1 bottom-1 bg-white transition duration-400 rounded-full; }
+        input:checked + .slider { @apply bg-yellow-500; }
+        input:checked + .slider:before { transform: translateX(24px); }
+        /* Style for the video feed region */
+        #qr-reader-region {
+            display: block;
+            width: 100%;
+            padding-top: 75%; /* 4:3 Aspect Ratio */
+            position: relative;
+            overflow: hidden;
         }
-
-        .switch input {
-          @apply opacity-0 w-0 h-0;
-        }
-
-        .slider {
-          @apply absolute cursor-pointer top-0 left-0 right-0 bottom-0 bg-gray-300 transition duration-400 rounded-full;
-        }
-
-        .slider:before {
-          @apply absolute content-[''] h-6 w-6 left-1 bottom-1 bg-white transition duration-400 rounded-full;
-        }
-
-        input:checked + .slider {
-          @apply bg-yellow-500;
-        }
-
-        input:checked + .slider:before {
-          -webkit-transform: translateX(24px);
-          -ms-transform: translateX(24px);
-          transform: translateX(24px);
+        #qr-reader-region video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
         }
     </style>
 </head>
 <body class="bg-gray-100 font-sans min-h-screen">
 
-    <div class="container mx-auto max-w-md p-4 pt-10">
+    <div class="container mx-auto max-w-md p-4 pt-6">
         
         <!-- Header -->
         <div class="flex items-center justify-center space-x-3 my-4">
@@ -371,77 +376,89 @@
             <h1 class="text-2xl font-bold text-gray-800">YALIDINE MOBILE APP</h1>
         </div>
 
-        <!-- View 1: Scanner (Initial state) -->
-        <div id="scanner-view" class="bg-white p-6 rounded-xl shadow-xl">
-            <h2 class="text-lg font-semibold text-center mb-4 text-gray-700">Scan Monitor QR Code</h2>
-            <div id="qr-reader" class="w-full"></div>
-            <p class="text-center text-gray-500 text-sm mt-4">Point your camera at the locker monitor's code to connect.</p>
+        <!-- View 1: Scanner -->
+        <div id="scanner-view" class="bg-white p-6 rounded-xl shadow-lg">
+            <h2 class="text-xl font-semibold text-center mb-4 text-gray-800">Connect to Monitor</h2>
+            <!-- This div is where the video feed will appear -->
+            <div id="qr-reader-region" class="w-full bg-gray-900 rounded-lg overflow-hidden relative">
+                <!-- The video stream will be injected here by the library -->
+            </div>
+            <p id="scan-status-text" class="text-center text-gray-500 text-sm mt-4">Point camera at monitor's QR code.</p>
+            <button id="start-scan-btn" 
+                    class="w-full mt-4 flex justify-center items-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-white bg-yellow-500 hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition duration-150">
+                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                Start Camera
+            </button>
         </div>
 
-        <!-- View 2: Input Form (Active state) -->
+        <!-- View 2: Input Form (Hidden by default) -->
         <div id="form-view" class="hidden">
-            <div class="bg-white p-6 rounded-xl shadow-xl">
-                
-                <!-- Connection Status and Scan Again -->
-                <div class="flex justify-between items-center mb-4 pb-4 border-b border-gray-200">
-                    <div>
-                        <p class="text-xs text-gray-500">Connected to Monitor:</p>
-                        <p id="connected-monitor-id" class="font-mono text-sm font-medium text-gray-700">...</p>
-                    </div>
-                    <button id="scan-again-button" class="text-sm text-blue-600 hover:underline">Rescan Monitor</button>
+            
+            <!-- Connection Status Card -->
+            <div class="bg-white p-4 rounded-xl shadow-lg flex justify-between items-center mb-6">
+                <div>
+                    <p class="text-xs text-gray-500">Connected to:</p>
+                    <p id="connected-monitor-id" class="font-mono text-sm font-medium text-green-600">...</p>
                 </div>
-                
-                <!-- Mode Toggle -->
-                <div class="flex items-center justify-between my-4 bg-gray-50 p-3 rounded-lg border">
-                    <span class="text-base font-semibold text-gray-700">Current Mode: <span id="current-mode">Staff (Add)</span></span>
+                <button id="scan-again-button" class="text-sm text-blue-600 hover:underline font-medium">Disconnect</button>
+            </div>
+            
+            <!-- Mode Toggle Card -->
+            <div class="bg-white p-4 rounded-xl shadow-lg mb-6">
+                <div class="flex items-center justify-between">
+                    <span class="text-base font-semibold text-gray-700">Mode: <span id="current-mode" class="font-bold text-gray-900"></span></span>
                     <label class="switch">
                         <input type="checkbox" id="mode-toggle">
                         <span class="slider"></span>
                     </label>
                 </div>
+            </div>
 
-                <!-- --- 1. STAFF MODE (ADD PARCEL) --- -->
-                <form id="staff-form" class="space-y-4 pt-4">
-                    <h3 class="text-lg font-bold text-gray-800 mb-4">1. Add New Parcel (Staff)</h3>
-                    <div>
-                        <label for="available-locker-select" class="block text-sm font-medium text-gray-700">Select Available Locker</label>
-                        <select id="available-locker-select" required
-                                class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"></select>
-                    </div>
-                    <div>
-                        <label for="ownerId" class="block text-sm font-medium text-gray-700">Customer Name / ID (for tracking)</label>
-                        <input type="text" id="ownerId" placeholder="e.g., John Doe" required
-                               class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500">
-                        <p class="text-xs text-gray-400 mt-1">Parcel Code and PIN will be auto-generated.</p>
-                    </div>
-                    
-                    <button type="submit" id="staff-submit-button" disabled
-                            class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-gray-900 bg-green-400 hover:bg-green-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150">
-                        Create Parcel & Occupy Locker
-                    </button>
-                </form>
-
-                <!-- --- 2. CUSTOMER MODE (RETRIEVE PARCEL) --- -->
-                <div id="customer-form" class="space-y-4 pt-4 hidden">
-                    <h3 class="text-lg font-bold text-gray-800 mb-4">2. Retrieve Parcel (Customer)</h3>
-                    <div>
-                        <label for="customer-parcel-select" class="block text-sm font-medium text-gray-700">Select Parcel to Take Out</label>
-                        <select id="customer-parcel-select" required
-                                class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"></select>
-                        <p class="text-xs text-gray-400 mt-1">This simulates choosing an item from your tracking list.</p>
-                    </div>
-                    
-                    <button type="button" id="scan-button" disabled
-                            class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-gray-900 bg-yellow-400 hover:bg-yellow-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition duration-150">
-                        Open Selected Locker
-                    </button>
-                    
-                    <p class="text-xs text-gray-500 text-center">**Note: This action triggers the 'OpenCommand' in the database.**</p>
+            <!-- --- 1. STAFF MODE (ADD PARCEL) --- -->
+            <div id="staff-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4">
+                <h3 class="text-xl font-bold text-gray-800 flex items-center">
+                    <svg class="w-6 h-6 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    Add New Parcel (Staff)
+                </h3>
+                <div>
+                    <label for="available-locker-select" class="block text-sm font-medium text-gray-700">Available Locker</label>
+                    <select id="available-locker-select" required
+                            class="mt-1 block w-full px-3 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"></select>
+                </div>
+                <div>
+                    <label for="ownerId" class="block text-sm font-medium text-gray-700">Customer Name / ID</label>
+                    <input type="text" id="ownerId" placeholder="e.g., John Doe" required
+                           class="mt-1 block w-full px-3 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500">
+                    <p class="text-xs text-gray-400 mt-1">Parcel Code and PIN will be auto-generated.</p>
                 </div>
                 
-                <div id="status-message" class="text-center mt-4 h-6">
-                    <!-- Status messages appear here -->
+                <button type="submit" id="staff-submit-button" disabled
+                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150 disabled:opacity-50">
+                    Create Parcel & Occupy Locker
+                </button>
+            </div>
+
+            <!-- --- 2. CUSTOMER MODE (RETRIEVE PARCEL) --- -->
+            <div id="customer-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4 hidden">
+                <h3 class="text-xl font-bold text-gray-800 flex items-center">
+                    <svg class="w-6 h-6 mr-2 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg>
+                    Retrieve Parcel (Customer)
+                </h3>
+                <div>
+                    <label for="customer-parcel-select" class="block text-sm font-medium text-gray-700">Select Your Parcel</label>
+                    <select id="customer-parcel-select" required
+                            class="mt-1 block w-full px-3 py-3 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"></select>
                 </div>
+                
+                <button type="button" id="scan-button" disabled
+                        class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-white bg-yellow-500 hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition duration-150 disabled:opacity-50">
+                    Open Selected Locker
+                </button>
+            </div>
+            
+            <!-- Global Status Message Area -->
+            <div id="status-message" class="text-center mt-4 h-6">
+                <!-- Status messages appear here -->
             </div>
         </div>
 
