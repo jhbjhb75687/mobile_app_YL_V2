@@ -6,11 +6,11 @@
     <title>Yalidine Locker Control</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- 
+
+    <!--
       FIX: Load QR Scanner library as a standard script.
       This file creates global variables: `window.Html5Qrcode` and `window.Html5QrcodeSupportedFormats`.
-      It is NOT an ES module, which is why importing from it failed.
+      It is NOT an ES module.
     -->
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
@@ -19,7 +19,6 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, setLogLevel, doc, onSnapshot, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        
         // FIX: Removed the 'import { Html5Qrcode, ... }' line, as the library is now loaded globally.
 
 
@@ -30,7 +29,9 @@
           projectId: "yalidine-locker",
           storageBucket: "yalidine-locker.firebasestorage.app",
           messagingSenderId: "80966682621",
-          appId: "1:809666Kids-Eat-Free-Flyer",
+          // --- THIS IS THE FIX ---
+          // The appId now correctly matches the monitor's config.
+          appId: "1:80966682621:web:19fe082c2b2fc2b582bb94",
           measurementId: "G-0RSYKGESYP"
         };
         
@@ -227,7 +228,6 @@
             
             // Stop the camera
             try {
-                // Use the global window.Html5Qrcode object
                 await html5Qrcode.stop();
                 console.log("Scanner stopped.");
             } catch (err) {
@@ -415,7 +415,7 @@
             </div>
 
             <!-- --- 1. STAFF MODE (ADD PARCEL) --- -->
-            <div id="staff-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4">
+            <form id="staff-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4">
                 <h3 class="text-xl font-bold text-gray-800 flex items-center">
                     <svg class="w-6 h-6 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     Add New Parcel (Staff)
@@ -436,7 +436,7 @@
                         class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150 disabled:opacity-50">
                     Create Parcel & Occupy Locker
                 </button>
-            </div>
+            </form>
 
             <!-- --- 2. CUSTOMER MODE (RETRIEVE PARCEL) --- -->
             <div id="customer-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4 hidden">
