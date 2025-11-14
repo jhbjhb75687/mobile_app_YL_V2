@@ -6,24 +6,34 @@
     <title>Yalidine Locker Control</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-
-    <!--
+    
+    <!-- 
       FIX: Load QR Scanner library as a standard script.
       This file creates global variables: `window.Html5Qrcode` and `window.Html5QrcodeSupportedFormats`.
-      It is NOT an ES module.
+      It is NOT an ES module, which is why importing from it failed.
     -->
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
     <!-- Firebase Libraries -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, setLogLevel, doc, onSnapshot, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
         // FIX: Removed the 'import { Html5Qrcode, ... }' line, as the library is now loaded globally.
 
 
         // --- Configuration ---
-        // Accessing __app_id from the global scope, providing a default if missing.
+        const firebaseConfig = {
+          apiKey: "AIzaSyBJzd4UCAgUH-SvUbw1WJDIAeyY1Kfgce4",
+          authDomain: "yalidine-locker.firebaseapp.com",
+          projectId: "yalidine-locker",
+          storageBucket: "yalidine-locker.firebasestorage.app",
+          messagingSenderId: "80966682621",
+          appId: "1:809666Kids-Eat-Free-Flyer",
+          measurementId: "G-0RSYKGESYP"
+        };
+        
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'yalidine-locker-demo';
         const LOCKER_COUNT = 12;
 
@@ -127,23 +137,14 @@
         
         /** Listens to the central locker status document. */
         function listenForLockerStatus() {
-            // We use the same appId as the monitor to find the correct document
             lockerStatusDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'lockers', 'status');
             onSnapshot(lockerStatusDocRef, (docSnap) => {
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    // We must check if this document matches the monitor we scanned
-                    if (data.monitorSessionId === monitorSessionId) {
-                        lockerData = data; 
-                        updateLockerSelectors();
-                    } else {
-                        // This case can happen if the monitor restarts
-                        showStatus("Monitor session mismatch. Please scan again.", true);
-                        resetToScanner();
-                    }
+                    lockerData = data; 
+                    updateLockerSelectors();
                 } else {
                     showStatus("Error: Monitor session is not active.", true);
-                    resetToScanner();
                 }
             }, (error) => {
                 showStatus(`Error listening to status: ${error.message}`, true);
@@ -226,6 +227,7 @@
             
             // Stop the camera
             try {
+                // Use the global window.Html5Qrcode object
                 await html5Qrcode.stop();
                 console.log("Scanner stopped.");
             } catch (err) {
@@ -282,44 +284,11 @@
 
 
         // --- Main Initialization ---
-        async function main() {
-            let firebaseConfig = {};
-            let initialAuthToken = null;
-
-            // 1. Load configuration from environment globals
-            try {
-                if (typeof window.__firebase_config === 'string' && window.__firebase_config.length > 0) {
-                    firebaseConfig = JSON.parse(window.__firebase_config);
-                } else {
-                    console.warn("Environment __firebase_config not found, using fallback.");
-                    // Fallback config (for local testing)
-                    firebaseConfig = {
-                      apiKey: "AIzaSyBJzd4UCAgUH-SvUbw1WJDIAeyY1Kfgce4",
-                      authDomain: "yalidine-locker.firebaseapp.com",
-                      projectId: "yalidine-locker",
-                      storageBucket: "yalidine-locker.firebasestorage.app",
-                      messagingSenderId: "80966682621",
-                      appId: "1:80966682621:web:19fe082c2b2fc2b582bb94",
-                      measurementId: "G-0RSYKGESYP"
-                    };
-                }
-                
-                if (typeof window.__initial_auth_token === 'string') {
-                    initialAuthToken = window.__initial_auth_token;
-                }
-            } catch (e) {
-                 console.error("Failed to parse __firebase_config:", e);
-                 // Keep fallback config if parsing fails
-                 if (Object.keys(firebaseConfig).length === 0) {
-                     console.error("Fallback config also missing. App will fail.");
-                 }
-            }
-            
+        function main() {
             if (Object.keys(firebaseConfig).length === 0) {
-                console.error("Firebase config is empty. App cannot start.");
+                console.error("Firebase config not found. App cannot start.");
                 return;
             }
-
 
             try {
                 const app = initializeApp(firebaseConfig);
@@ -341,15 +310,8 @@
                         resetToScanner(); // Go to scanner view
                     } else {
                         console.log("Signing in...");
-                        let authPromise;
-                        if (initialAuthToken) {
-                            authPromise = signInWithCustomToken(auth, initialAuthToken);
-                        } else {
-                            authPromise = signInAnonymously(auth);
-                        }
-                        authPromise.catch((error) => {
-                            console.error(`Sign-in failed: ${error.message}`);
-                            showStatus(`Sign-in failed: ${error.message}`, true);
+                        signInAnonymously(auth).catch((error) => {
+                            console.error(`Anonymous sign-in failed: ${error.message}`);
                         });
                     }
                 });
@@ -370,7 +332,6 @@
                 switchMode(); // Initial state setup
             } catch (e) {
                 console.error(`Initialization error: ${e.message}`);
-                showStatus(`Initialization error: ${e.message}`, true);
             }
         }
 
@@ -454,7 +415,7 @@
             </div>
 
             <!-- --- 1. STAFF MODE (ADD PARCEL) --- -->
-            <form id="staff-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4">
+            <div id="staff-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4">
                 <h3 class="text-xl font-bold text-gray-800 flex items-center">
                     <svg class="w-6 h-6 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                     Add New Parcel (Staff)
@@ -475,7 +436,7 @@
                         class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition duration-150 disabled:opacity-50">
                     Create Parcel & Occupy Locker
                 </button>
-            </form>
+            </div>
 
             <!-- --- 2. CUSTOMER MODE (RETRIEVE PARCEL) --- -->
             <div id="customer-form" class="bg-white p-6 rounded-xl shadow-lg space-y-4 hidden">
@@ -493,7 +454,6 @@
                         class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-white bg-yellow-500 hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition duration-150 disabled:opacity-50">
                     Open Selected Locker
                 </button>
-Nothing to show
             </div>
             
             <!-- Global Status Message Area -->
