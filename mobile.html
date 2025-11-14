@@ -17,24 +17,13 @@
     <!-- Firebase Libraries -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, setLogLevel, doc, onSnapshot, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         // FIX: Removed the 'import { Html5Qrcode, ... }' line, as the library is now loaded globally.
 
 
         // --- Configuration ---
-        const firebaseConfig = {
-          apiKey: "AIzaSyBJzd4UCAgUH-SvUbw1WJDIAeyY1Kfgce4",
-          authDomain: "yalidine-locker.firebaseapp.com",
-          projectId: "yalidine-locker",
-          storageBucket: "yalidine-locker.firebasestorage.app",
-          messagingSenderId: "80966682621",
-          // --- THIS IS THE FIX ---
-          // The appId now correctly matches the monitor's config.
-          appId: "1:80966682621:web:19fe082c2b2fc2b582bb94",
-          measurementId: "G-0RSYKGESYP"
-        };
-        
+        // Accessing __app_id from the global scope, providing a default if missing.
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'yalidine-locker-demo';
         const LOCKER_COUNT = 12;
 
@@ -138,14 +127,23 @@
         
         /** Listens to the central locker status document. */
         function listenForLockerStatus() {
+            // We use the same appId as the monitor to find the correct document
             lockerStatusDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'lockers', 'status');
             onSnapshot(lockerStatusDocRef, (docSnap) => {
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    lockerData = data; 
-                    updateLockerSelectors();
+                    // We must check if this document matches the monitor we scanned
+                    if (data.monitorSessionId === monitorSessionId) {
+                        lockerData = data; 
+                        updateLockerSelectors();
+                    } else {
+                        // This case can happen if the monitor restarts
+                        showStatus("Monitor session mismatch. Please scan again.", true);
+                        resetToScanner();
+                    }
                 } else {
                     showStatus("Error: Monitor session is not active.", true);
+                    resetToScanner();
                 }
             }, (error) => {
                 showStatus(`Error listening to status: ${error.message}`, true);
@@ -284,11 +282,44 @@
 
 
         // --- Main Initialization ---
-        function main() {
+        async function main() {
+            let firebaseConfig = {};
+            let initialAuthToken = null;
+
+            // 1. Load configuration from environment globals
+            try {
+                if (typeof window.__firebase_config === 'string' && window.__firebase_config.length > 0) {
+                    firebaseConfig = JSON.parse(window.__firebase_config);
+                } else {
+                    console.warn("Environment __firebase_config not found, using fallback.");
+                    // Fallback config (for local testing)
+                    firebaseConfig = {
+                      apiKey: "AIzaSyBJzd4UCAgUH-SvUbw1WJDIAeyY1Kfgce4",
+                      authDomain: "yalidine-locker.firebaseapp.com",
+                      projectId: "yalidine-locker",
+                      storageBucket: "yalidine-locker.firebasestorage.app",
+                      messagingSenderId: "80966682621",
+                      appId: "1:80966682621:web:19fe082c2b2fc2b582bb94",
+                      measurementId: "G-0RSYKGESYP"
+                    };
+                }
+                
+                if (typeof window.__initial_auth_token === 'string') {
+                    initialAuthToken = window.__initial_auth_token;
+                }
+            } catch (e) {
+                 console.error("Failed to parse __firebase_config:", e);
+                 // Keep fallback config if parsing fails
+                 if (Object.keys(firebaseConfig).length === 0) {
+                     console.error("Fallback config also missing. App will fail.");
+                 }
+            }
+            
             if (Object.keys(firebaseConfig).length === 0) {
-                console.error("Firebase config not found. App cannot start.");
+                console.error("Firebase config is empty. App cannot start.");
                 return;
             }
+
 
             try {
                 const app = initializeApp(firebaseConfig);
@@ -310,8 +341,15 @@
                         resetToScanner(); // Go to scanner view
                     } else {
                         console.log("Signing in...");
-                        signInAnonymously(auth).catch((error) => {
-                            console.error(`Anonymous sign-in failed: ${error.message}`);
+                        let authPromise;
+                        if (initialAuthToken) {
+                            authPromise = signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            authPromise = signInAnonymously(auth);
+                        }
+                        authPromise.catch((error) => {
+                            console.error(`Sign-in failed: ${error.message}`);
+                            showStatus(`Sign-in failed: ${error.message}`, true);
                         });
                     }
                 });
@@ -332,6 +370,7 @@
                 switchMode(); // Initial state setup
             } catch (e) {
                 console.error(`Initialization error: ${e.message}`);
+                showStatus(`Initialization error: ${e.message}`, true);
             }
         }
 
@@ -454,6 +493,7 @@
                         class="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-md text-lg font-medium text-white bg-yellow-500 hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition duration-150 disabled:opacity-50">
                     Open Selected Locker
                 </button>
+Nothing to show
             </div>
             
             <!-- Global Status Message Area -->
